@@ -44,12 +44,6 @@ var manager = new PhysicalDiskManager();
 var physicalDiscs = manager.GetPhysicalDiscs();
 ```
 
-If you intend to do backup and restore, look at my BackupRestore package!
-It contains the logic to 
-- create image backups using VSS
-- create incremental file backups using VSS
-- restore images
-
 
 ## DEMOS
 
@@ -62,8 +56,60 @@ I have included several demos in the repository, to guide you:
 - Demo 6: backup a physical disk and compress the data on the fly
 - Demo 7: copy one file using AlphaVSS (volume shadow copy service) and AlphaFS
 - Demo 8: copy a volume to a file, using AlphaVSS, in 2 variants: using volume shadow copy and directly
-- Demo 9: backup a physical disk completely (image backup using VSS and on-the-fly zip compression)
+- Demo 9: backup a physical disk completely (image backup using VSS and on-the-fly zip compression) 
 - Demo A: restore a physical disk completely / from zip file created by Demo9
+
+**Note**: 
+Demos 9 and A are preliminary and not fully working. Currently I'm on it.
+When they're working, I will most likely move them to my BackupRestore repository.
+
+
+
+## BACKUP AND RESTORE
+
+If you intend to do backup and restore, look at my BackupRestore package!
+It contains the logic to 
+- create image backups using VSS
+- create incremental file backups using VSS
+- restore images
+
+
+
+## COMMENTS 
+
+### Useful links
+- https://en.wikipedia.org/wiki/Disk_partitioning
+- https://en.wikipedia.org/wiki/Master_boot_record
+- https://en.wikipedia.org/wiki/GUID_Partition_Table
+
+### GPT partitioning 
+Storage of GPTs (Guid Partition Tables) is a bit weird. On every disc, two copies exist with different structure.
+- The disc starts with a dummy MBR at LBA 0 (logical block address). It's called "protective MBR".
+- The first GPT has header first at LBA 1, then the partition table at LBA 2.
+- The second is at the end of the disc, starting with the table and ending with the header in the very last LBA.
+
+If you want to restore an image backup to a new disc, you will most likely not have the exact same size than your backup has. 
+So you want to relocate the second GPT to the end of the new disc.
+For this, you need to adjust the pointers in both GPTs.
+I tried restoring a sector-by-sector backup to a larger disk 1:1 without relocation. 
+You can start the OS, but I don't recommend it.
+
+Identification of Partitions in GPT partitioning scheme is done by reading the partition type GUID 
+from the partition table and looking it up in a table.
+The table is included on page https://en.wikipedia.org/wiki/GUID_Partition_Table.
+I have added that table as class "PartitionTypeGuid" to my library, 
+
+### Hybrid MBR (LBA 0 + GPT)
+My library currently does not support hybrid MBRs.
+
+### Volume shadow copy service
+If you create a snapshot, you can use it for both image and file backups.
+So it doesn't matter if you want to do a full image backup of your C drive or an incremental file backup.
+
+### Performance
+My demo 6 does a full image backup a physical disk and compresses the data on the fly with the standard ZIP algorithm.
+The algorithm is straight forward and not optimized for speed. It only uses one core. There's room for improvement.
+
 
 
 ## HOW TO INSTALL A NUGET PACKAGE
