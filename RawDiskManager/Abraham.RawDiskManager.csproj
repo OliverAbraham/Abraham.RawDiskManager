@@ -1,0 +1,39 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <Nullable>enable</Nullable>
+    <GeneratePackageOnBuild>True</GeneratePackageOnBuild>
+    <Copyright>Oliver Abraham</Copyright>
+    <Title>Abraham.RawDiskManager</Title>
+    <Description>Read,write data from/to physical disks, partitions, volumes. Read/write/analyze MBR and GPT, disc structures. Create discs, partitions, volumes.</Description>
+    <PackageProjectUrl>https://github.com/OliverAbraham/Abraham.RawDiscManager</PackageProjectUrl>
+    <PackageIcon>Ciridata.png</PackageIcon>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <RepositoryUrl>https://github.com/OliverAbraham/Abraham.RawDiscManager</RepositoryUrl>
+    <PackageReleaseNotes>2025-04-20</PackageReleaseNotes>
+    <PackageLicenseFile>LICENSE.txt</PackageLicenseFile>
+    <IncludeSymbols>True</IncludeSymbols>
+    <PackageRequireLicenseAcceptance>True</PackageRequireLicenseAcceptance>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\Ciridata.png">
+      <Pack>True</Pack>
+      <PackagePath>\</PackagePath>
+    </None>
+    <None Include="..\LICENSE.txt">
+      <Pack>True</Pack>
+      <PackagePath>\</PackagePath>
+    </None>
+    <None Include="..\README.md">
+      <Pack>True</Pack>
+      <PackagePath>\</PackagePath>
+    </None>
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.Management" Version="9.0.4" />
+  </ItemGroup>
+
+</Project>
