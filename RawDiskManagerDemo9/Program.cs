@@ -116,8 +116,7 @@ internal class Program
                     metadata.StartTime = DateTime.Now;
                     metadata.PhysicalDisks.Add(disc);
 
-                    var mbr = manager.ReadMBR(disc.DeviceId);
-                    metadata.MbrDecoded = new MbrParser().Parse(mbr);
+                    (var mbr, metadata.MbrDecoded) = manager.ReadMBR(disc.DeviceId);
 
                     (var gpt1, var gpt2, var gpt1Decoded, var gpt2Decoded) = manager.ReadGPTs(disc.DeviceId, disc.LogicalSectorSize, disc.Size);
                     metadata.Gpt1Decoded = gpt1Decoded;

@@ -30,5 +30,7 @@ namespace RawDiskManager
         public ulong                Size                    => TotalNumberOfClusters * AllocationUnitSize;
         public ulong                FreeSpace               => SizeRemaining;
         public bool                 HasDriveLetter          => !string.IsNullOrEmpty(DriveLetter);
+
+        public string IntermediateLabel { get; set; }
     }
 }

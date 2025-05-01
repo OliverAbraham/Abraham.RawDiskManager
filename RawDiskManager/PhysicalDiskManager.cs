@@ -34,6 +34,7 @@ namespace RawDiskManager
             public ulong    CompletedBytes          { get; internal set; }
             public ulong    RemainingBytes          { get; internal set; }
             public double   Percentage              { get; internal set; }
+            public double   TotalPercentage         { get; internal set; }
             public bool     IsCancellationRequested { get; internal set; }
             public bool     End                     { get; internal set; }
         }
@@ -45,14 +46,16 @@ namespace RawDiskManager
         /// <summary>
         /// Holds the size of a buffer that will be allocated by read and write functions.
         /// </summary>
-        public ulong BufferSize { get; set; } = 512 * 100 * 1000;
+        public ulong BufferSize { get; set; } = 1 * 1024 * 1024; // 1 MB
 
         public string ErrorMessages { get; private set; } = "";
+        public ulong  OverallJobSize { get; set; }
         #endregion
 
 
 
         #region ------------- Fields --------------------------------------------------------------
+        private ulong  _overallProgress = 0;
         #endregion
 
 
@@ -372,6 +375,22 @@ namespace RawDiskManager
             ProgressHandler progressHandler = null, 
             CancellationToken token = default)
         {
+            //using (var handle = File.OpenHandle(destinationPath, FileMode.Create, FileAccess.Write))
+            //{
+            //   CopyFromStreamToStream2(sourceStream, handle, sourceSize, sourceOffset, destinationOffset, progressHandler, token);
+            //   handle.Close();
+            //}
+
+
+            //var _access = FileAccess.Write;
+            //var attributes = (FileAttributes)(/*File_Attributes.Normal |*/ File_Attributes.BackupSemantics);
+            //var diskHandle = PlatformShim.CreateDeviceHandle(destinationPath, _access, attributes);
+            //if (diskHandle.IsInvalid)
+            //    throw new ArgumentException($"Invalid destinationPath: '{destinationPath}'");
+            //CopyFromStreamToStream2(sourceStream, diskHandle, sourceSize, sourceOffset, destinationOffset, progressHandler, token);
+            //diskHandle.Close();
+
+
             var _access = FileAccess.Write;
             var attributes = (FileAttributes)(/*File_Attributes.Normal |*/ File_Attributes.BackupSemantics);
             var diskHandle = PlatformShim.CreateDeviceHandle(destinationPath, _access, attributes);
@@ -381,7 +400,7 @@ namespace RawDiskManager
             var destStream = new FileStream(diskHandle, _access);
             if (!destStream.CanWrite)
                 throw new ArgumentException($"Invalid destination stream: cannot write to stream");
-
+            
             CopyFromStreamToStream(sourceStream, destStream, sourceSize, sourceOffset, destinationOffset, progressHandler, token);
         }
 
@@ -401,7 +420,7 @@ namespace RawDiskManager
             Stream destStream, 
             ulong sourceSize, 
             ulong sourceOffset,
-            ulong destinationOffset, 
+            ulong destinationOffset,
             ProgressHandler progressHandler = null, 
             CancellationToken token = default)
         {
@@ -427,6 +446,8 @@ namespace RawDiskManager
             if (sourceOffset > 0)
                 sourceStream.Seek((long)sourceOffset, SeekOrigin.Begin);
 
+            var destLBA = destinationOffset / 512;
+
             if (destinationOffset > 0)
                 destStream.Seek((long)destinationOffset, SeekOrigin.Begin);
 
@@ -446,7 +467,6 @@ namespace RawDiskManager
                     var chunk = numBytesToRead - bytesTotal;
                     bytesRead = sourceStream.Read(buffer, bytesTotal, chunk);
                     bytesTotal += bytesRead;
-                    //Console.WriteLine($"Expected {chunk,10} bytes, but only got {bytesRead,10} bytes. got in total {bytesTotal,10}");
                 }
                 bytesRead = bytesTotal;
 
@@ -456,6 +476,7 @@ namespace RawDiskManager
                 destStream.Write(buffer, 0, bytesRead);
 
                 progress.CompletedBytes += (ulong)bytesRead;
+                _overallProgress        += (ulong)bytesRead;
                 CalculateAndReportProgress(progressHandler, progress);
             }
             while (!token.IsCancellationRequested && bytesRead > 0);
@@ -463,8 +484,80 @@ namespace RawDiskManager
 
             progress.IsCancellationRequested = token.IsCancellationRequested;
             progress.End = true;
+            progress.CompletedBytes = progress.TotalBytes;
             CalculateAndReportProgress(progressHandler, progress);
         }
+
+        //public void CopyFromStreamToStream2(
+        //    Stream sourceStream, 
+        //    SafeFileHandle destinationHandle, 
+        //    ulong sourceSize, 
+        //    ulong sourceOffset,
+        //    ulong destinationOffset, 
+        //    ProgressHandler progressHandler = null, 
+        //    CancellationToken token = default)
+        //{
+        //    if (sourceStream is null)
+        //        throw new ArgumentNullException(nameof(sourceStream));
+        //    if (destinationHandle is null)
+        //        throw new ArgumentNullException(nameof(destinationHandle));
+        //    if (sourceSize <= 0)
+        //        throw new ArgumentException("Source size must be greater than 0");
+        //    if (BufferSize < 512)
+        //        throw new ArgumentException("Buffer size must be greater or equal to 512, (the smallest size of a sector)");
+        //
+        //    var progress = new ProgressData() { TotalBytes = sourceSize };
+        //
+        //    byte[] buffer = new byte[BufferSize];
+        //
+        //    int sourceSizeInt = (sourceSize > int.MaxValue) ? int.MaxValue : (int)sourceSize;
+        //
+        //    // it could be that the stream is in total smaller than the buffer
+        //    int numBytesToRead = Math.Min(buffer.GetLength(0), sourceSizeInt);
+        //    int bytesRead;
+        //
+        //    if (sourceOffset > 0)
+        //        sourceStream.Seek((long)sourceOffset, SeekOrigin.Begin);
+        //
+        //    var destLBA = destinationOffset / 512;
+        //
+        //    do
+        //    {
+        //        progress.RemainingBytes = progress.TotalBytes - progress.CompletedBytes;
+        //        if (progress.RemainingBytes <= 0)
+        //            break;
+        //
+        //        if (progress.RemainingBytes < (ulong)numBytesToRead) // adjust the buffer for the last chunk
+        //            numBytesToRead = (int)progress.RemainingBytes;
+        //
+        //        // we might get less bytes than requested, so we need to check that and loop over it until our buffer is full ans has a multiple of a sector size
+        //        int bytesTotal = bytesRead = sourceStream.Read(buffer, 0, numBytesToRead);
+        //        while (bytesTotal < numBytesToRead && bytesTotal > 0 && bytesRead > 0 && !token.IsCancellationRequested)
+        //        {
+        //            var chunk = numBytesToRead - bytesTotal;
+        //            bytesRead = sourceStream.Read(buffer, bytesTotal, chunk);
+        //            bytesTotal += bytesRead;
+        //            //Console.WriteLine($"Expected {chunk,10} bytes, but only got {bytesRead,10} bytes. got in total {bytesTotal,10}");
+        //        }
+        //        bytesRead = bytesTotal;
+        //
+        //        if (token.IsCancellationRequested)
+        //            break;
+        //
+        //        Console.WriteLine($"Writing {bytesRead} bytes...");
+        //        var buffer2 = new ReadOnlyMemory<byte>(buffer, 0, bytesRead);
+        //        RandomAccess.Write(destinationHandle, [buffer2], (long)destinationOffset);
+        //        destinationOffset += (ulong)bytesRead;
+        //
+        //        progress.CompletedBytes += (ulong)bytesRead;
+        //        CalculateAndReportProgress(progressHandler, progress);
+        //    }
+        //    while (!token.IsCancellationRequested && bytesRead > 0);
+        //
+        //    progress.IsCancellationRequested = token.IsCancellationRequested;
+        //    progress.End = true;
+        //    CalculateAndReportProgress(progressHandler, progress);
+        //}
 
         public PhysicalDisk GetDiscByDeviceID(List<PhysicalDisk> discs, int deviceId)
         {
@@ -516,11 +609,16 @@ namespace RawDiskManager
             return (endOfLastPartition, $"Free space at the end of the disc: {SizeFormatter.Format(disc.Size - endOfLastPartition)} will be skipped.");
         }
 
-        public byte[] ReadMBR(int deviceID)
+        public (byte[], MbrContents) ReadMBR(int deviceID)
         {
             var physicalDevice = new PhysicalDevice();
             var sourcePath = @$"\\.\PHYSICALDRIVE{deviceID}";
-            return physicalDevice.Read(sourcePath, 0, 512);
+            var mbr = physicalDevice.Read(sourcePath, 0, 512);
+
+            var mbrParser = new MbrParser();
+            var mbrDecoded = mbrParser.Parse(mbr);
+
+            return (mbr, mbrDecoded);
         }
 
         public (byte[],byte[],GptContents, GptContents) ReadGPTs(int deviceID, ulong logicalSectorSize, ulong totalDiscSize)
@@ -540,7 +638,8 @@ namespace RawDiskManager
 
             var gpt1 = new byte[gpt1Decoded.GptHeaderLength + gpt1Decoded.GptArrayLength];
             gpt1Header.CopyTo(gpt1, 0);
-            gpt1Array.CopyTo(gpt1, (int)gpt1Decoded.GptHeaderLength);
+            if (gpt1.Length > gpt1Array.Length)
+                gpt1Array.CopyTo(gpt1, (int)gpt1Decoded.GptHeaderLength);
 
 
 
@@ -562,7 +661,8 @@ namespace RawDiskManager
 
             var gpt2 = new byte[gpt1Decoded.GptHeaderLength + gpt1Decoded.GptArrayLength];
             gpt2Header.CopyTo(gpt2, 0);
-            gpt2Array.CopyTo(gpt2, (int)gpt1Decoded.GptHeaderLength);
+            if (gpt2.Length > gpt2Array.Length)
+                gpt2Array.CopyTo(gpt2, (int)gpt1Decoded.GptHeaderLength);
 
             return (gpt1, gpt2, gpt1Decoded, gpt2Decoded);
         }
@@ -1407,9 +1507,15 @@ namespace RawDiskManager
                 return;
                     
             if (progress.TotalBytes == 0)
-                progress.Percentage = 0;
+            {
+                progress.Percentage      = 0;
+                progress.TotalPercentage = 0;
+            }
             else
-                progress.Percentage = (double)(progress.CompletedBytes * 100) / progress.TotalBytes;
+            {
+                progress.Percentage      = (double)(progress.CompletedBytes * 100) / progress.TotalBytes;
+                progress.TotalPercentage = (double)(_overallProgress        * 100) / OverallJobSize;
+            }
 
             progressHandler(progress);
         }

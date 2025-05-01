@@ -36,7 +36,7 @@ internal class Program
 
 
         string destinationDirectory = GetTempDirectory();
-        var filename = @"C:\Temp\ImageBackup_Disc1_DriveI_Full_2025-04-19_16-34-28.zip";
+        var filename = @"C:\Temp\ImageBackup_Full_2025-04-23_08-43-41.zip";
 
 
 
@@ -156,14 +156,14 @@ internal class Program
                     gpt1Decoded.FirstUsableLBA = firstUsableLBA;
                     gpt1Decoded.BackupLBA      = backupLBA;
                     gpt1Decoded.LastUsableLBA  = lastUsableLBA;
-                    gptParser.Reconstruct(gpt1, gpt1Decoded);
+                    gptParser.Reconstruct(gpt1Decoded, ref gpt1);
 
                     gpt2Decoded.CurrentLBA     = currentLBA;
                     gpt2Decoded.StartingLBA    = startingLBA;
                     gpt2Decoded.FirstUsableLBA = firstUsableLBA;
                     gpt2Decoded.BackupLBA      = backupLBA;
                     gpt2Decoded.LastUsableLBA  = lastUsableLBA;
-                    gptParser.Reconstruct(gpt2, gpt2Decoded);
+                    gptParser.Reconstruct(gpt2Decoded, ref gpt2);
 
                     // writing GPT1
                     (int header1Length, int array1Length, byte[] gpt1Header, byte[] gpt1Array) = SplitGPT(gpt1);
@@ -181,21 +181,21 @@ internal class Program
 
 
                     Log($"------------------ restoring partitions ------------------");
-                    //foreach (var p in metadata.PhysicalDisks[0].Partitions)
-                    //{
-                    //    Log($"Partition {p.PartitionNumber}");
-                    //    _indentation = "    ";
-                    //    AddSomeDebugInfo(destinationDisc, p, gpt1Decoded, raw: false);
-                    //
-                    //    var zipStream = GetStreamFromArchive(archive, p.BackupFilename!);
-                    //
-                    //    ulong sourceOffset = 0;
-                    //    ulong destinationOffset = p.Offset;
-                    //    manager.WriteFromStreamToDisk(zipStream, p.Size, destinationPath, sourceOffset, destinationOffset, MyProgressHandler);
-                    //
-                    //    Log($"Finished 100 %                                       ");
-                    //    Log($"");
-                    //}
+                    foreach (var p in metadata.PhysicalDisks[0].Partitions)
+                    {
+                        Log($"Partition {p.PartitionNumber}");
+                        _indentation = "    ";
+                        AddSomeDebugInfo(destinationDisc, p, gpt1Decoded, raw: false);
+                    
+                        var zipStream = GetStreamFromArchive(archive, $"partition{p.PartitionNumber}");
+                    
+                        ulong sourceOffset = 0;
+                        ulong destinationOffset = p.Offset;
+                        manager.WriteFromStreamToDisk(zipStream, p.Size, destinationPath, sourceOffset, destinationOffset, MyProgressHandler);
+                    
+                        Log($"Finished 100 %                                       ");
+                        Log($"");
+                    }
 
                 }
 

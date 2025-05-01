@@ -46,10 +46,10 @@ namespace RawDiskManager
             mbr.CopyProtectFlag       = ByteLib.ExtractWord   (mbrData, 0x01BC);
             mbr.DiscSignature48       = ByteLib.ExtractBytes  (mbrData, 0x01B8, 6);
 
-            mbr.PartitionEntries[0]   = ExtractEntryAt     (mbrData, 0x01BE);
-            mbr.PartitionEntries[1]   = ExtractEntryAt     (mbrData, 0x01CE);
-            mbr.PartitionEntries[2]   = ExtractEntryAt     (mbrData, 0x01DE);
-            mbr.PartitionEntries[3]   = ExtractEntryAt     (mbrData, 0x01EE);
+            mbr.PartitionEntries[0]   = ExtractEntryAt        (mbrData, 0x01BE);
+            mbr.PartitionEntries[1]   = ExtractEntryAt        (mbrData, 0x01CE);
+            mbr.PartitionEntries[2]   = ExtractEntryAt        (mbrData, 0x01DE);
+            mbr.PartitionEntries[3]   = ExtractEntryAt        (mbrData, 0x01EE);
 
             mbr.BootSignature         = ByteLib.ExtractWord   (mbrData, 0x01FE);
             return mbr;
@@ -60,6 +60,14 @@ namespace RawDiskManager
             if (mbr.BootSignature != 0xAA55)
                 throw new ArgumentException("Invalid MBR signature. Expected 0xAA55 at the end of the MBR");
         }
+
+        public void CreateNewSignature(byte[] mbrData)
+        {
+            var buffer = new byte[6];
+            new Random((int)DateTime.Now.Ticks).NextBytes(buffer);
+            ByteLib.WriteBytes(mbrData, 0x01B8, 6, buffer);
+        }
+
         private MbrPartitionEntry ExtractEntryAt(byte[] data, int offset)
         {
             var entry = new MbrPartitionEntry();

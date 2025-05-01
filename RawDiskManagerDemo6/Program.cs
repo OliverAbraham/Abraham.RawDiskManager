@@ -74,7 +74,7 @@ internal class Program
                 {
                     var fileInArchive = archive.CreateEntry("mbr", CompressionLevel.Optimal);
                     using (var entryStream = fileInArchive.Open())
-                    using (var fileToCompressStream = new MemoryStream(mbr))
+                    using (var fileToCompressStream = new MemoryStream(mbr.Item1))
                         fileToCompressStream.CopyTo(entryStream);
 
                     fileInArchive = archive.CreateEntry("gpt1", CompressionLevel.Optimal);

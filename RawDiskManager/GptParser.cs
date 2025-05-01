@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Linq;
 
 /// <summary>
 /// Read,write data from/to physical disks, partitions, volumes. 
@@ -39,6 +40,16 @@ namespace RawDiskManager
     /// </summary>
     public class GptParser
     {
+        public ulong Gpt1HeaderLBA    { get; private set; }
+        public ulong Gpt1ArrayLBA     { get; private set; }
+        public ulong Gpt2HeaderLBA    { get; private set; }
+        public ulong Gpt2ArrayLBA     { get; private set; }
+        public ulong Gpt1HeaderOffset { get; private set; }
+        public ulong Gpt1ArrayOffset  { get; private set; }
+        public ulong Gpt2HeaderOffset { get; private set; }
+        public ulong Gpt2ArrayOffset  { get; private set; }
+        public ulong FirstUsableLBA   { get; private set; }
+
         private ulong _logicalSectorSize;
 
         public GptParser(ulong logicalSectorSize)
@@ -89,7 +100,7 @@ namespace RawDiskManager
             gpt.Revision                 = ByteLib.ExtractDword(gptHeader, 0x0008);               // 8 (0x08) 	4 bytes 	Revision number of header - 1.0 (00h 00h 01h 00h) for UEFI 2.10
             gpt.HeaderSize               = ByteLib.ExtractDword(gptHeader, 0x000C);               // 12 (0x0C) 	4 bytes 	Header size in little endian (in bytes, usually 5Ch 00h 00h 00h or 92 bytes)
             gpt.CRC32                    = ByteLib.ExtractDword(gptHeader, 0x0010);               // 16 (0x10) 	4 bytes 	CRC32 of header (offset +0 to +0x5B) in little endian, with this field zeroed during calculation
-                                                                                                // 20 (0x14) 	4 bytes 	Reserved; must be zero
+                                                                                                  // 20 (0x14) 	4 bytes 	Reserved; must be zero
             gpt.CurrentLBA               = ByteLib.ExtractQword(gptHeader, 0x0018);               // 24 (0x18) 	8 bytes 	Current LBA (location of this header copy)
             gpt.BackupLBA                = ByteLib.ExtractQword(gptHeader, 0x0020);               // 32 (0x20) 	8 bytes 	Backup LBA (location of the other header copy)
             gpt.FirstUsableLBA           = ByteLib.ExtractQword(gptHeader, 0x0028);               // 40 (0x28) 	8 bytes 	First usable LBA for partitions (primary partition table last LBA + 1)
@@ -112,25 +123,65 @@ namespace RawDiskManager
             return gpt;
         }
 
-        public void Reconstruct(byte[] gpt, GptContents gptDecoded)
+        public void Reconstruct(GptContents gptDecoded, ref byte[] gpt)
         {
-            ByteLib.WriteQword(gpt, 0x0018,  gptDecoded.CurrentLBA    );               // 24 (0x18) 	8 bytes 	Current LBA (location of this header copy)
-            ByteLib.WriteQword(gpt, 0x0020,  gptDecoded.BackupLBA     );               // 32 (0x20) 	8 bytes 	Backup LBA (location of the other header copy)
-            ByteLib.WriteQword(gpt, 0x0028,  gptDecoded.FirstUsableLBA);               // 40 (0x28) 	8 bytes 	First usable LBA for partitions (primary partition table last LBA + 1)
-            ByteLib.WriteQword(gpt, 0x0030,  gptDecoded.LastUsableLBA );               // 48 (0x30) 	8 bytes 	Last usable LBA (secondary partition table first LBA − 1)
-            ByteLib.WriteQword(gpt, 0x0048,  gptDecoded.StartingLBA   );               // 72 (0x48) 	8 bytes 	Starting LBA of array of partition entries (usually 2 for compatibility)
+            ByteLib.WriteQword(gpt, 0x0018, gptDecoded.CurrentLBA);
+            ByteLib.WriteQword(gpt, 0x0020, gptDecoded.BackupLBA);
+            ByteLib.WriteQword(gpt, 0x0028, gptDecoded.FirstUsableLBA);
+            ByteLib.WriteQword(gpt, 0x0030, gptDecoded.LastUsableLBA);
+            ByteLib.WriteQword(gpt, 0x0048, gptDecoded.StartingLBA);
 
-            // re-calculate the checksum
-            ByteLib.WriteQword(gpt, 0x0010, 0);
-            var crc32 = CRC32.Calculate(gpt, 0, 0x5C);
-            ByteLib.WriteQword(gpt, 0x0010, crc32);
+            // recalculate the header checksum
+            uint crc = CalculateGptHeaderCrc(gpt);
+            ByteLib.WriteDword(gpt, 0x0010, crc);
+
+            // generate new unique partition GUIDs
+            foreach (var entry in gptDecoded.PartitionTable.Where(p => p.HasData))
+                entry.UniquePartitionGUID = Guid.NewGuid();
+
+            RecreatePartitionTable(gptDecoded, gpt);
+            RecreatePartitionTableCrc(gptDecoded, gpt);
         }
 
-
-        public void Validate(GptContents gpt)
+        public void RecreatePartitionTable(GptContents gptDecoded, byte[] gpt)
         {
-            //if (gpt.BootSignature != 0xAA55)
-            //    throw new ArgumentException("Invalid MBR signature. Expected 0xAA55 at the end of the MBR");
+            // recreate the partition table
+            int arrayOffset = (int)_logicalSectorSize;
+            for (ulong i = 0; i < (ulong)gptDecoded.PartitionTable.Count; i++)
+            {
+                var entry = gptDecoded.PartitionTable[(int)i];
+                int offset = (int)(_logicalSectorSize + (i * gptDecoded.SizeOfPartitionEntry));
+                ByteLib.WriteBytes        (gpt, offset + 0x00, 16, entry.PartitionTypeGUID.ToByteArray());
+                ByteLib.WriteBytes        (gpt, offset + 0x10, 16, entry.UniquePartitionGUID.ToByteArray());
+                ByteLib.WriteQword        (gpt, offset + 0x20    , entry.FirstLBA);
+                ByteLib.WriteQword        (gpt, offset + 0x28    , entry.LastLBA);
+                ByteLib.WriteQword        (gpt, offset + 0x30    , entry.AttributeFlags);
+                ByteLib.WriteNameAsUtf16LE(gpt, offset + 0x38, 72, entry.PartitionName);
+            }
+        }
+
+        public void RecreatePartitionTableCrc(GptContents gptDecoded, byte[] gpt)
+        {
+            // recalculate the table checksum
+            var crc32 = CalculateGptTableCrc(gpt, gptDecoded);
+            ByteLib.WriteDword(gpt, 0x0058, crc32);
+        }
+
+        public static uint CalculateGptHeaderCrc(byte[] gpt)
+        {
+            var originalValue = ByteLib.ExtractDword(gpt, 0x0010);
+
+            ByteLib.WriteDword(gpt, 0x0010, 0);
+            var crc32 = CRC32.Calculate(gpt, 0, 0x5C);
+            
+            ByteLib.WriteDword(gpt, 0x0010, originalValue);
+            return crc32;
+        }
+
+        public uint CalculateGptTableCrc(byte[] rawGpt, GptContents gptDecoded)
+        {
+            int arrayOffset = (int)_logicalSectorSize;
+            return CRC32.Calculate(rawGpt, arrayOffset, (int)gptDecoded.GptArrayLength);
         }
 
         private GptPartitionEntry ExtractEntryAt(byte[] gptData, ulong offset)
@@ -142,9 +193,64 @@ namespace RawDiskManager
             entry.FirstLBA            = ByteLib.ExtractQword(gptData, offset + 0x20);                           // 8 bytes
             entry.LastLBA             = ByteLib.ExtractQword(gptData, offset + 0x28);                           // 8 bytes
             entry.AttributeFlags      = ByteLib.ExtractQword(gptData, offset + 0x30);                           // 8 bytes
-            entry.PartitionName       = ByteLib.ExtractName (gptData, offset + 0x38, 72);                       // 72 bytes max
+            entry.PartitionName       = ByteLib.ExtractNameAsUtf16LE (gptData, offset + 0x38, 72);                       // 72 bytes max
             entry.PartitionTypeDesc   = PartitionTypeGuid.GetTypeByGuid(entry.PartitionTypeGUID.ToString());
             return entry;
+        }
+
+        public void ReconstructBothGpts(GptContents gpt1Decoded, GptContents gpt2Decoded, ulong size, ref byte[] gpt1, ref byte[] gpt2)
+        {
+            var totalLBACount          = size / _logicalSectorSize;
+            Gpt1HeaderLBA              = 1;
+            Gpt1ArrayLBA               = 2;
+            FirstUsableLBA             = 2 + 32;
+            Gpt2HeaderLBA              = totalLBACount - 1;
+            Gpt2ArrayLBA               = totalLBACount - 33;
+            ulong lastUsableLBA        = totalLBACount - 34;
+            Gpt1HeaderOffset           = Gpt1HeaderLBA * _logicalSectorSize;
+            Gpt1ArrayOffset            = Gpt1ArrayLBA  * _logicalSectorSize;
+            Gpt2HeaderOffset           = Gpt2HeaderLBA * _logicalSectorSize;
+            Gpt2ArrayOffset            = Gpt2ArrayLBA  * _logicalSectorSize;
+
+            // we need to patch the GPTs before writing
+            gpt1Decoded.CurrentLBA     = Gpt1HeaderLBA;
+            gpt1Decoded.StartingLBA    = Gpt1ArrayLBA;
+            gpt1Decoded.FirstUsableLBA = FirstUsableLBA;
+            gpt1Decoded.BackupLBA      = Gpt2HeaderLBA;     // points forward to GPT2 header!
+            gpt1Decoded.LastUsableLBA  = lastUsableLBA;
+            Reconstruct(gpt1Decoded, ref gpt1);
+
+            gpt2Decoded.CurrentLBA     = Gpt2HeaderLBA;
+            gpt2Decoded.StartingLBA    = Gpt1ArrayLBA;
+            gpt2Decoded.FirstUsableLBA = FirstUsableLBA;
+            gpt2Decoded.BackupLBA      = Gpt1HeaderLBA;     // points back to GPT1 header!
+            gpt2Decoded.LastUsableLBA  = lastUsableLBA;
+            Reconstruct(gpt2Decoded, ref gpt2);
+        }
+
+        public (int, int, byte[], byte[]) Split(byte[] gpt)
+        {
+            int headerLength;
+            int arrayLength;
+            byte[] gpt2Header;
+            byte[] gpt2Array;
+
+            // Split gpt2 into header and array
+            headerLength = 512;
+            arrayLength  = gpt.GetLength(0) - headerLength;
+            gpt2Header   = new byte[headerLength];
+            gpt2Array   = new byte[gpt.GetLength(0) - gpt2Header.GetLength(0)];
+
+            Array.Copy(gpt, 0, gpt2Header, 0, gpt2Header.GetLength(0));
+            Array.Copy(gpt, gpt2Header.GetLength(0), gpt2Array, 0, gpt.GetLength(0) - headerLength);
+
+            return (headerLength, arrayLength, gpt2Header, gpt2Array);
+        }
+
+        public void Validate(GptContents gpt)
+        {
+            //if (gpt.BootSignature != 0xAA55)
+            //    throw new ArgumentException("Invalid MBR signature. Expected 0xAA55 at the end of the MBR");
         }
     }
 
@@ -172,14 +278,14 @@ namespace RawDiskManager
 
     public class GptPartitionEntry
     {
-        public Guid   PartitionTypeGUID   { get; internal set; } = new Guid();
-        public Guid   UniquePartitionGUID { get; internal set; } = new Guid();
-        public UInt64 FirstLBA            { get; internal set; }                 // 8 bytes
-        public UInt64 LastLBA             { get; internal set; }                 // 8 bytes
-        public UInt64 AttributeFlags      { get; internal set; }                 // 8 bytes
-        public string PartitionName       { get; internal set; }                 // 72 bytes max
-        public string PartitionTypeDesc   { get; internal set; }
-        public ulong  LogicalSectorSize   { get; internal set; }
+        public Guid   PartitionTypeGUID   { get; set; } = new Guid();
+        public Guid   UniquePartitionGUID { get; set; } = new Guid();
+        public UInt64 FirstLBA            { get; set; }                 // 8 bytes
+        public UInt64 LastLBA             { get; set; }                 // 8 bytes
+        public UInt64 AttributeFlags      { get; set; }                 // 8 bytes
+        public string PartitionName       { get; set; }                 // 72 bytes max
+        public string PartitionTypeDesc   { get; set; }
+        public ulong  LogicalSectorSize   { get; set; }
         public bool   HasData             => PartitionTypeGUID.Equals(Guid.Empty) == false; // not 0x00000000-0000-0000-0000-000000000000
         public ulong  TotalSectors        => HasData ? (LastLBA - FirstLBA + 1) : 0;
         public ulong  TotalBytes          => HasData ? (TotalSectors * LogicalSectorSize) : 0;

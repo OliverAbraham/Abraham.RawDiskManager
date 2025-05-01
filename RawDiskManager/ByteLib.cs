@@ -47,7 +47,7 @@ namespace RawDiskManager
             return result;
         }
 
-        public static string ExtractName(byte[] buffer, ulong offset, ulong count)
+        public static string ExtractNameAsUtf16LE(byte[] buffer, ulong offset, ulong count)
         {
             var bytes = ExtractBytes(buffer, offset, count);
             
@@ -61,17 +61,48 @@ namespace RawDiskManager
             return result.TrimEnd('\0');
         }
 
-        public static void WriteQword(byte[] buffer, int offset, ulong value)
+        public static void WriteBytes(byte[] destination, int offset, int count, byte[] source)
         {
-            //write the value to the byte array at the specified offset
-            buffer[offset + 0] = (byte)((value      ) & 0xFF);
-            buffer[offset + 1] = (byte)((value >>  8) & 0xFF);
-            buffer[offset + 2] = (byte)((value >> 16) & 0xFF);
-            buffer[offset + 3] = (byte)((value >> 24) & 0xFF);
-            buffer[offset + 4] = (byte)((value >> 32) & 0xFF);
-            buffer[offset + 5] = (byte)((value >> 40) & 0xFF);
-            buffer[offset + 6] = (byte)((value >> 48) & 0xFF);
-            buffer[offset + 7] = (byte)((value >> 56) & 0xFF);
+            Array.Copy(source, 0, destination, offset, (long)count);
+        }
+
+        public static void WriteWord(byte[] destination, int offset, ulong value)
+        {
+            destination[offset + 0] = (byte)((value      ) & 0xFF);
+            destination[offset + 1] = (byte)((value >>  8) & 0xFF);
+        }
+
+        public static void WriteDword(byte[] destination, int offset, ulong value)
+        {
+            destination[offset + 0] = (byte)((value      ) & 0xFF);
+            destination[offset + 1] = (byte)((value >>  8) & 0xFF);
+            destination[offset + 2] = (byte)((value >> 16) & 0xFF);
+            destination[offset + 3] = (byte)((value >> 24) & 0xFF);
+        }
+
+        public static void WriteQword(byte[] destination, int offset, ulong value)
+        {
+            destination[offset + 0] = (byte)((value      ) & 0xFF);
+            destination[offset + 1] = (byte)((value >>  8) & 0xFF);
+            destination[offset + 2] = (byte)((value >> 16) & 0xFF);
+            destination[offset + 3] = (byte)((value >> 24) & 0xFF);
+            destination[offset + 4] = (byte)((value >> 32) & 0xFF);
+            destination[offset + 5] = (byte)((value >> 40) & 0xFF);
+            destination[offset + 6] = (byte)((value >> 48) & 0xFF);
+            destination[offset + 7] = (byte)((value >> 56) & 0xFF);
+        }
+
+        public static void WriteNameAsUtf16LE(byte[] destination, int offset, int maxLength, string name)
+        {
+            var nameAsBytes = Encoding.UTF32.GetBytes(name);
+            var length = Math.Min(maxLength-1, name.Length);
+            Array.Clear(destination, offset, maxLength);
+
+            for (int i = 0; i < name.Length; i++)
+            {
+                destination[offset + i*2    ] = nameAsBytes[i*4    ];
+                destination[offset + i*2 + 1] = nameAsBytes[i*4 + 1];
+            }
         }
     }
 }

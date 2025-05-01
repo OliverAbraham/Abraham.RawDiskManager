@@ -45,7 +45,7 @@ internal class Program
 
             Console.WriteLine($"------------------ read MBR ------------------");
             var mbr = manager.ReadMBR(deviceID);
-            File.WriteAllBytes(Path.Combine(destinationDirectory, $"PhysicalDisc{deviceID}_mbr.bin"), mbr);
+            File.WriteAllBytes(Path.Combine(destinationDirectory, $"PhysicalDisc{deviceID}_mbr.bin"), mbr.Item1);
 
 
             Console.WriteLine();
