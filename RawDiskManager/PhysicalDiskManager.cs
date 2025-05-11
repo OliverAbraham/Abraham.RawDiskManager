@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Management;
 using System.Threading;
+using static System.Runtime.InteropServices.JavaScript.JSType;
 
 //[assembly: System.Runtime.Versioning.SupportedOSPlatformAttribute("windows")]
 
@@ -56,11 +57,21 @@ namespace RawDiskManager
 
         #region ------------- Fields --------------------------------------------------------------
         private ulong  _overallProgress = 0;
+        private PhysicalDevice _physicalDevice;
         #endregion
 
 
 
         #region ------------- Init ----------------------------------------------------------------
+        public PhysicalDiskManager()
+        {
+            _physicalDevice = new PhysicalDevice();
+        }
+
+        public PhysicalDiskManager(PhysicalDevice physicalDevice)
+        {
+            _physicalDevice = physicalDevice;
+        }
         #endregion
 
 
@@ -241,7 +252,7 @@ namespace RawDiskManager
 
             using (FileStream destStream = new FileStream(destinationFilename, FileMode.Append, FileAccess.Write))
             {
-                ReadFromDiskToStream(sourcePath, sourceSize, destStream, progressHandler, token);
+                ReadFromDiskToStream(sourcePath, sourceSize, 0, 0, destStream, progressHandler, token);
             }
         }
 
@@ -284,20 +295,12 @@ namespace RawDiskManager
             CopyFromStreamToStream(sourceStream, destStream, sourceSize, 0, 0, progressHandler, token);
         }
 
-        /// <summary>
-        /// Reads a number of bytes from a physical disk, partition or volume and sends it into a stream.
-        /// </summary>
-        /// <param name="sourcePath">GUID or Volume ID</param>
-        /// <param name="sourceSize">Size that will only be forwarded to the progressHandler, for percent calculation</param>
-        /// <param name="destinationFilename"></param>
-        /// <param name="progressHandler">Callback method that will be called after a chunk was read. (determined by the BufferSize)</param>
-        /// <param name="token">Optional Cancellation token to cancel the processing at any time</param>
-        /// <exception cref="ArgumentException">Will be thrown for parameter problems</exception>
-        /// <exception cref="Exception">Will be thrown for I/O problems.</exception>
         public void ReadFromDiskToStream(
             string sourcePath, 
             ulong sourceSize, 
-            MemoryStream destStream, 
+            ulong sourceOffset,
+            ulong destOffset,
+            Stream destStream, 
             ProgressHandler progressHandler = null,
             CancellationToken token = default(CancellationToken))
         {
@@ -320,7 +323,7 @@ namespace RawDiskManager
             if (!sourceStream.CanRead)
                 throw new ArgumentException($"Invalid source stream: cannot read from stream");
 
-            CopyFromStreamToStream(sourceStream, destStream, sourceSize, 0, 0, progressHandler, token);
+            CopyFromStreamToStream(sourceStream, destStream, sourceSize, sourceOffset, destOffset, progressHandler, token);
         }
 
         /// <summary>
@@ -391,17 +394,19 @@ namespace RawDiskManager
             //diskHandle.Close();
 
 
-            var _access = FileAccess.Write;
-            var attributes = (FileAttributes)(/*File_Attributes.Normal |*/ File_Attributes.BackupSemantics);
-            var diskHandle = PlatformShim.CreateDeviceHandle(destinationPath, _access, attributes);
-            if (diskHandle.IsInvalid)
-                throw new ArgumentException($"Invalid destinationPath: '{destinationPath}'");
-            
-            var destStream = new FileStream(diskHandle, _access);
-            if (!destStream.CanWrite)
-                throw new ArgumentException($"Invalid destination stream: cannot write to stream");
-            
-            CopyFromStreamToStream(sourceStream, destStream, sourceSize, sourceOffset, destinationOffset, progressHandler, token);
+            //var _access = FileAccess.Write;
+            //var attributes = (FileAttributes)(/*File_Attributes.Normal |*/ File_Attributes.BackupSemantics);
+            //var diskHandle = PlatformShim.CreateDeviceHandle(destinationPath, _access, attributes);
+            //if (diskHandle.IsInvalid)
+            //    throw new ArgumentException($"Invalid destinationPath: '{destinationPath}'");
+            //
+            //var destStream = new FileStream(diskHandle, _access);
+            //if (!destStream.CanWrite)
+            //    throw new ArgumentException($"Invalid destination stream: cannot write to stream");
+            //
+            //CopyFromStreamToStream(sourceStream, destStream, sourceSize, sourceOffset, destinationOffset, progressHandler, token);
+
+            CopyFromStreamToPhysicalDisc(sourceStream, destinationPath, sourceSize, sourceOffset, destinationOffset, progressHandler, token);
         }
 
         /// <summary>
@@ -460,32 +465,106 @@ namespace RawDiskManager
                 if (progress.RemainingBytes < (ulong)numBytesToRead) // adjust the buffer for the last chunk
                     numBytesToRead = (int)progress.RemainingBytes;
 
-                // we might get less bytes than requested, so we need to check that and loop over it until our buffer is full ans has a multiple of a sector size
-                int bytesTotal = bytesRead = sourceStream.Read(buffer, 0, numBytesToRead);
-                while (bytesTotal < numBytesToRead && bytesTotal > 0 && bytesRead > 0 && !token.IsCancellationRequested)
-                {
-                    var chunk = numBytesToRead - bytesTotal;
-                    bytesRead = sourceStream.Read(buffer, bytesTotal, chunk);
-                    bytesTotal += bytesRead;
-                }
-                bytesRead = bytesTotal;
-
-                if (token.IsCancellationRequested)
+                bytesRead = ReadCompleteBufferFromStream(sourceStream, buffer, numBytesToRead, token);
+                if (token.IsCancellationRequested || bytesRead == 0)
                     break;
 
                 destStream.Write(buffer, 0, bytesRead);
 
-                progress.CompletedBytes += (ulong)bytesRead;
-                _overallProgress        += (ulong)bytesRead;
-                CalculateAndReportProgress(progressHandler, progress);
+                CalculateAndReportProgress(progressHandler, progress, bytesRead);
             }
             while (!token.IsCancellationRequested && bytesRead > 0);
             destStream.Close();
 
-            progress.IsCancellationRequested = token.IsCancellationRequested;
-            progress.End = true;
-            progress.CompletedBytes = progress.TotalBytes;
-            CalculateAndReportProgress(progressHandler, progress);
+            CalculateAndReportProgressAtTheEnd(progressHandler, progress, token.IsCancellationRequested);
+        }
+
+        /// <summary>
+        /// </summary>
+        public void CopyFromStreamToPhysicalDisc(
+            Stream sourceStream, 
+            string destinationPath,
+            ulong sourceSize, 
+            ulong sourceOffset,
+            ulong destinationOffset,
+            ProgressHandler progressHandler = null, 
+            CancellationToken token = default)
+        {
+            if (sourceStream is null)
+                throw new ArgumentNullException(nameof(sourceStream));
+            if (sourceSize <= 0)
+                throw new ArgumentException("Source size must be greater than 0");
+            if (BufferSize < 512)
+                throw new ArgumentException("Buffer size must be greater or equal to 512, (the smallest size of a sector)");
+
+            var progress = new ProgressData() { TotalBytes = sourceSize };
+
+            byte[] buffer = new byte[BufferSize];
+
+            // we need to do a trick to avoid AccessDenied exception while writing to the physical disc.
+            // As written in the thread below, the answer is:
+            // "The problem is that as soon as the OS sees a mountable partition described in the partition table,
+            // it does exactly what you said it does, lock and mount. So if you don't have a partition table until
+            // the very end, there is nothing to mount. In my case, I'm writing a disk image to a GPT disk, so I
+            // jumped over 16k at the top and went back to write it later. I think I borked an offset because it
+            // wasn't mountable afterwards but it didn't throw this exception either and it wrote the whole file
+            // to disk as opposed to almost none. I'll report back tomorrow if I get it to work."
+            // https://github.com/DiscUtils/DiscUtils/issues/181
+            // https://github.com/LordMike/RawDiskLib/issues/12#issuecomment-716147985
+            byte[] bufferForFirstChunk = new byte[BufferSize];
+            var destinationOffsetForFirstChunk = destinationOffset;
+
+            // calculate the size of the first chunk
+            // it could be that the stream is in total smaller than the buffer
+            int sourceSizeInt = (sourceSize > int.MaxValue) ? int.MaxValue : (int)sourceSize;
+            int numBytesToRead = Math.Min(buffer.GetLength(0), sourceSizeInt);
+
+            if (sourceOffset > 0)
+                sourceStream.Seek((long)sourceOffset, SeekOrigin.Begin);
+
+            var chunk = 1;
+            do
+            {
+                progress.RemainingBytes = progress.TotalBytes - progress.CompletedBytes;
+                if (progress.RemainingBytes <= 0)
+                    break;
+                if (progress.RemainingBytes < (ulong)numBytesToRead) // adjust the buffer for the last chunk
+                    numBytesToRead = (int)progress.RemainingBytes;
+
+                var bytesRead = ReadCompleteBufferFromStream(sourceStream, buffer, numBytesToRead, token);
+                if (token.IsCancellationRequested || bytesRead == 0)
+                    break;
+
+                if (chunk == 1)
+                    buffer.CopyTo(bufferForFirstChunk, 0);
+                else
+                    _physicalDevice.WriteRawToDevice(buffer, destinationOffset, (ulong)bytesRead);
+
+                destinationOffset += (ulong)bytesRead;
+                CalculateAndReportProgress(progressHandler, progress, bytesRead);
+                chunk++;
+            }
+            while (!token.IsCancellationRequested);
+
+            // at the end, we need to write the first chunk to the device
+            _physicalDevice.WriteRawToDevice(bufferForFirstChunk, destinationOffsetForFirstChunk, (ulong)bufferForFirstChunk.Length);
+
+            CalculateAndReportProgressAtTheEnd(progressHandler, progress, token.IsCancellationRequested);
+        }
+
+        private static int ReadCompleteBufferFromStream(Stream sourceStream, byte[] buffer, int numBytesToRead, CancellationToken token)
+        {
+            int bytesRead;
+            // we might get less bytes than requested, so we need to check that and loop over it until our buffer is full ans has a multiple of a sector size
+            int bytesTotal = bytesRead = sourceStream.Read(buffer, 0, numBytesToRead);
+            while (bytesTotal < numBytesToRead && bytesTotal > 0 && bytesRead > 0 && !token.IsCancellationRequested)
+            {
+                var chunkToRead = numBytesToRead - bytesTotal;
+                bytesRead = sourceStream.Read(buffer, bytesTotal, chunkToRead);
+                bytesTotal += bytesRead;
+            }
+            bytesRead = bytesTotal;
+            return bytesRead;
         }
 
         //public void CopyFromStreamToStream2(
@@ -611,9 +690,8 @@ namespace RawDiskManager
 
         public (byte[], MbrContents) ReadMBR(int deviceID)
         {
-            var physicalDevice = new PhysicalDevice();
             var sourcePath = @$"\\.\PHYSICALDRIVE{deviceID}";
-            var mbr = physicalDevice.Read(sourcePath, 0, 512);
+            var mbr = _physicalDevice.Read(sourcePath, 0, 512);
 
             var mbrParser = new MbrParser();
             var mbrDecoded = mbrParser.Parse(mbr);
@@ -623,17 +701,16 @@ namespace RawDiskManager
 
         public (byte[],byte[],GptContents, GptContents) ReadGPTs(int deviceID, ulong logicalSectorSize, ulong totalDiscSize)
         {
-            var physicalDevice = new PhysicalDevice();
             var gptParser = new GptParser(logicalSectorSize);
             var sourcePath = @$"\\.\PHYSICALDRIVE{deviceID}";
 
             // read the first sector of the GPT to get the total length of the GPT:
             var gpt1HeaderOffset = 1 * logicalSectorSize;
-            var gpt1Header = physicalDevice.Read(sourcePath, gpt1HeaderOffset, 1*logicalSectorSize);
+            var gpt1Header = _physicalDevice.Read(sourcePath, gpt1HeaderOffset, 1*logicalSectorSize);
             (var pos, var length) = gptParser.ParseArrayPositionAndSize(gpt1Header);
             
             // read the GPT again in full length:
-            var gpt1Array = physicalDevice.Read(sourcePath, pos, length);
+            var gpt1Array = _physicalDevice.Read(sourcePath, pos, length);
             var gpt1Decoded = gptParser.Parse(gpt1Header, gpt1Array);
 
             var gpt1 = new byte[gpt1Decoded.GptHeaderLength + gpt1Decoded.GptArrayLength];
@@ -652,10 +729,10 @@ namespace RawDiskManager
             // and the backup Partition Entry Array is placed between the end of the last partition and the last block.
 
             var gpt2HeaderOffset = totalDiscSize - 1 * logicalSectorSize;
-            var gpt2Header = physicalDevice.Read(sourcePath, gpt2HeaderOffset, gpt1Decoded.GptHeaderLength);
+            var gpt2Header = _physicalDevice.Read(sourcePath, gpt2HeaderOffset, gpt1Decoded.GptHeaderLength);
 
             (var gpt2ArrayOffset, var gpt2Arraylength) = gptParser.ParseArrayPositionAndSize(gpt2Header);
-            var gpt2Array  = physicalDevice.Read(sourcePath, gpt2ArrayOffset, gpt2Arraylength);
+            var gpt2Array  = _physicalDevice.Read(sourcePath, gpt2ArrayOffset, gpt2Arraylength);
 
             var gpt2Decoded = gptParser.Parse(gpt2Header, gpt2Array);
 
@@ -669,8 +746,7 @@ namespace RawDiskManager
 
         public void WritePhysicalSectors(string destinationPath, byte[] data, ulong offset, ulong length)
         {
-            var physicalDevice = new PhysicalDevice();
-            physicalDevice.Write(destinationPath, data, offset, length);
+            _physicalDevice.Write(destinationPath, data, offset, length);
         }
         #endregion
 
@@ -1501,11 +1577,37 @@ namespace RawDiskManager
             partition.Volume.TotalNumberOfClusters = TotalNumberOfClusters;
         }
 
-        private void CalculateAndReportProgress(ProgressHandler progressHandler, ProgressData progress)
+        private void CalculateAndReportProgressAtTheEnd(ProgressHandler progressHandler, ProgressData progress, bool isCancellationRequested)
         {
             if (progressHandler is null)
                 return;
                     
+            progress.IsCancellationRequested = isCancellationRequested;
+            progress.End = true;
+            progress.CompletedBytes = progress.TotalBytes;
+
+            if (progress.TotalBytes == 0)
+            {
+                progress.Percentage      = 0;
+                progress.TotalPercentage = 0;
+            }
+            else
+            {
+                progress.Percentage      = (double)(progress.CompletedBytes * 100) / progress.TotalBytes;
+                progress.TotalPercentage = (double)(_overallProgress        * 100) / OverallJobSize;
+            }
+
+            progressHandler(progress);
+        }
+
+        private void CalculateAndReportProgress(ProgressHandler progressHandler, ProgressData progress, int bytesRead)
+        {
+            if (progressHandler is null)
+                return;
+                    
+            progress.CompletedBytes += (ulong)bytesRead;
+            _overallProgress += (ulong)bytesRead;
+
             if (progress.TotalBytes == 0)
             {
                 progress.Percentage      = 0;

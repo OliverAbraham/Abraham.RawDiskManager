@@ -273,7 +273,7 @@ namespace RawDiskManager
         public ulong  GptArrayLength           { get; set; }
         public ulong  GptTotalLength           { get; set; } // this is a calculated value, not in the GPT header
 
-        public List<GptPartitionEntry> PartitionTable { get; internal set; } = new List<GptPartitionEntry>();
+        public List<GptPartitionEntry> PartitionTable { get; set; } = new List<GptPartitionEntry>();
     }
 
     public class GptPartitionEntry

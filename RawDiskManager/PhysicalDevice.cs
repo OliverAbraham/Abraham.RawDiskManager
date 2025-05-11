@@ -1,6 +1,8 @@
-﻿using System;
+﻿using Microsoft.Win32.SafeHandles;
+using System;
+using System.Net.Sockets;
+using System.Reflection.Metadata;
 using System.Runtime.InteropServices;
-using Microsoft.Win32.SafeHandles;
 using System.Threading;
 
 /// <summary>
@@ -25,6 +27,11 @@ namespace RawDiskManager
     public class PhysicalDevice : IDisposable
     {
         #region ------------- Types and constants -------------------------------------------------
+
+        public const uint FSCTL_LOCK_VOLUME      = 0x00090018;
+        public const uint FSCTL_UNLOCK_VOLUME    = 0x0009001c;
+        public const uint FSCTL_DISMOUNT_VOLUME  = 0x00090020;
+
         public const short FILE_ATTRIBUTE_NORMAL = 0x80;
         public const short INVALID_HANDLE_VALUE  = -1;
         public const uint  GENERIC_READ          = 0x80000000;
@@ -118,6 +125,17 @@ namespace RawDiskManager
             out uint lpFileSystemFlags,
             char[] lpFileSystemNameBuffer,
             int nFileSystemNameSize);
+
+        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        public static extern bool DeviceIoControl(
+          SafeFileHandle hDevice,               // handle to a volume
+          uint dwIoControlCode,         // FSCTL_LOCK_VOLUME,   // dwIoControlCode
+          IntPtr lpInBuffer,            // NULL,                        // lpInBuffer
+          uint nInBufferSize,           // 0,                           // nInBufferSize
+          IntPtr lpOutBuffer,           // NULL,                        // lpOutBuffer
+          uint nOutBufferSize,          // 0,                           // nOutBufferSize
+          IntPtr lpBytesReturned,       // number of bytes returned
+          IntPtr lpOverlapped);         // OVERLAPPED structure
         #endregion
 
 
@@ -140,6 +158,36 @@ namespace RawDiskManager
 
 
         #region ------------- Methods -------------------------------------------------------------
+        public void LockDevice()
+        {
+            uint bytesReturned = 0;
+
+            var result = DeviceIoControl(
+                _safeHandle,                // handle to a volume
+                FSCTL_LOCK_VOLUME,          // dwIoControlCode
+                0,                          // lpInBuffer
+                0,                          // nInBufferSize
+                0,                          // lpOutBuffer
+                0,                          // nOutBufferSize
+                (nint)bytesReturned,        // number of bytes returned
+                IntPtr.Zero);               // OVERLAPPED structure;
+        }
+
+        public void UnlockDevice()
+        {
+            uint bytesReturned = 0;
+
+            var result = DeviceIoControl(
+                _safeHandle,                // handle to a volume
+                FSCTL_UNLOCK_VOLUME,        // dwIoControlCode
+                0,                          // lpInBuffer
+                0,                          // nInBufferSize
+                0,                          // lpOutBuffer
+                0,                          // nOutBufferSize
+                (nint)bytesReturned,        // number of bytes returned
+                IntPtr.Zero);               // OVERLAPPED structure;
+        }
+
         public byte[] Read(string device, ulong offset, ulong length)
         {
             OpenFileHandles(device);
@@ -172,7 +220,7 @@ namespace RawDiskManager
                 Marshal.ThrowExceptionForHR(Marshal.GetHRForLastWin32Error());
         }
 
-        private void CloseFileHandles()
+        public void CloseFileHandles()
         {
             _safeHandle?.Close();
         }
